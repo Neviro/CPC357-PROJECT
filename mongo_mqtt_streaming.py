@@ -1,5 +1,6 @@
 import pymongo
 import paho.mqtt.client as mqtt
+import json
 from datetime import datetime, timezone
 from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
@@ -16,11 +17,11 @@ except Exception as e:
     print(e)
 
 # MongoDB configuration
-db = mongo_client["smarthome"]
-collection = db["iot"]
+db = mongo_client["smart_carpark"]
+collection = db["realtime_data"]
 
 # MQTT configuration
-mqtt_broker_address = "34.68.100.137"
+mqtt_broker_address = "" #### !!!! might need to update again whenever gcp vm restarted
 mqtt_topic = "iot"
 
 # Define the callback function for connection
@@ -38,8 +39,18 @@ def on_message(client, userdata, message):
     timestamp = datetime.now(timezone.utc)
     datetime_obj = timestamp.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     
+    data = json.loads(payload)
+
+    # Assign values to variables
+    TotalCar = data["TotalCar"]
+    EvCar = data["EvCar"]
+    PetrolCar = data["PetrolCar"]
+    AirQuality = data["AirQuality"]
+    Parking1Full = data["Parking1Full"]
+    Parking2Full = data["Parking2Full"]
+
     # Process the payload and insert into MongoDB with proper timestamp
-    document = {"timestamp": datetime_obj, "data": payload}
+    document = {"timestamp": datetime_obj, "TotalCar": TotalCar, "EvCar": EvCar, "PetrolCar": PetrolCar, "AirQuality": AirQuality, "Parking1Full": Parking1Full, "Parking2Full": Parking2Full}
     collection.insert_one(document)
     print("Data ingested into MongoDB")
 
