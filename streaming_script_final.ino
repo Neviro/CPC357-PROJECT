@@ -27,6 +27,15 @@ const int irParking2 = 8;
 // To detect air quality of vehicle
 const int airQualityPin = 9;
 
+// Counter for number of cars
+int total_car_count = 0;
+
+// Counter for number of cars
+int ev_car_count = 0;
+
+// Counter for number of cars
+int petrol_car_count = 0;
+
 // WiFi and MQTT configuration
 const char* WIFI_SSID = "CSLOUNGE666";
 const char* WIFI_PASSWORD = "ONLY4.0CANPASS";
@@ -108,13 +117,6 @@ void loop() {
     Serial.print(" P2 Full: ");
     Serial.println(parking2Full);
 
-    /// MQTT message in JSON format
-    char mqttMessage[256];
-    snprintf(mqttMessage, sizeof(mqttMessage), 
-            "{\"Barrier1\": %d, \"Barrier2\": %d, \"AirQuality\": %d, \"Parking1Full\": %d, \"Parking2Full\": %d}", 
-            barrier1State, barrier2State, airQualityValue, parking1Full, parking2Full);
-    client.publish(MQTT_TOPIC, mqttMessage);
-
 
     // Detect car at entry (IR 1 = 0 when car is present)
     if (barrier1State == 0) {
@@ -124,14 +126,16 @@ void loop() {
         barrierServo.write(servoOpenAngle);
         Serial.println("Barrier Opened");
         delay(2000);
+        total_car_count++;
 
         // Good air quality (EV)
-        if (airQualityValue < 1000) {
+        if (airQualityValue < 1300) {
             // Floor 1 available
             if (parking1Full == 1) {
                 lcd.clear();
                 scrollText("EV->1st Floor", 300, 2);
                 Serial.println("EV (Good Air Quality) -> Floor 1");
+                ev_car_count++;
             } else {
                 lcd.clear();
                 scrollText("1st Full->Redirect to Floor 2", 300, 2);
@@ -143,6 +147,7 @@ void loop() {
                 lcd.clear();
                 scrollText("Non-EV->2nd Floor", 300, 2);
                 Serial.println("Non-EV (Poor Air Quality) -> Floor 2");
+                petrol_car_count++;
             } else {
                 lcd.clear();
                 scrollText("2nd Full->Redirect to Floor 1", 300, 2);
@@ -165,6 +170,13 @@ void loop() {
         Serial.println("Barrier Closed");
         client.publish(MQTT_TOPIC, "Barrier closed");
         delay(2000);
+
+        /// MQTT message in JSON format
+        char mqttMessage[256];
+        snprintf(mqttMessage, sizeof(mqttMessage), 
+            "{\"TotalCar\": %d, \"EvCar\": %d, \"PetrolCar\": %d, \"AirQuality\": %d, \"Parking1Full\": %d, \"Parking2Full\": %d}", 
+            total_car_count, ev_car_count, petrol_car_count, airQualityValue, parking1Full, parking2Full);
+        client.publish(MQTT_TOPIC, mqttMessage);
     }
 
     delay(500);
