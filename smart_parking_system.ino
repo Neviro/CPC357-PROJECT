@@ -2,6 +2,7 @@
 #include <ESP32Servo.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
+#include <mbedtls/aes.h>
 
 // LCD address
 lcd_i2c lcd(0x3E, 16, 1);
@@ -12,38 +13,32 @@ const int servoPin = 4;
 const int servoOpenAngle = 90;
 const int servoCloseAngle = 180;
 
-// To open barrier (IR sensor 1)
+// Sensor pins
 const int irBarrier1 = 5;
-
-// To close barrier (IR sensor 2)
 const int irBarrier2 = 6;
-
-// To detect available parking slot on floor 1 (IR sensor 3)
 const int irParking1 = 7;
-
-// To detect available parking slot on floor 2 (IR sensor 4)
 const int irParking2 = 8;
-
-// To detect air quality of vehicle
 const int airQualityPin = 9;
 
-// Counter for number of cars
+// Counters
 int total_car_count = 0;
-
-// Counter for number of cars
 int ev_car_count = 0;
-
-// Counter for number of cars
 int petrol_car_count = 0;
 
 // WiFi and MQTT configuration
-const char* WIFI_SSID = ""; // Your your WIFI SSID/Name here
-const char* WIFI_PASSWORD = ""; // Your WIFI Password here
-const char* MQTT_SERVER = ""; // Your MQTT server IP address here
-const int MQTT_PORT = 1883; // Your MQTT server port here
-const char* MQTT_TOPIC = "iot"; // Your MQTT topic here
+const char* WIFI_SSID = "your_wifi_ssid";
+const char* WIFI_PASSWORD = "your_wifi_password";
+const char* MQTT_SERVER = "your_mqtt_server";
+const int MQTT_PORT = 8883;
+const char* MQTT_TOPIC = "iot_secure";
+const char* MQTT_USERNAME = "your_mqtt_username";
+const char* MQTT_PASSWORD = "your_mqtt_password";
 
-WiFiClient espClient;
+// Encryption key (AES-128)
+const unsigned char AES_KEY[16] = "your_16_byte_key";
+
+// WiFi and MQTT clients
+WiFiClientSecure espClient;
 PubSubClient client(espClient);
 
 void scrollText(String message, int scrollDelay, int repeatCount = 2);
@@ -62,10 +57,21 @@ void setup_wifi() {
         Serial.print(".");
     }
 
-    Serial.println("");
+    Serial.println();
     Serial.println("WiFi connected");
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
+}
+
+void encryptData(const char* input, unsigned char* output, size_t length) {
+    mbedtls_aes_context aes;
+    mbedtls_aes_init(&aes);
+    mbedtls_aes_setkey_enc(&aes, AES_KEY, 128);
+
+    unsigned char iv[16] = {0}; // Initialization vector
+    mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_ENCRYPT, length, iv, (unsigned char*)input, output);
+
+    mbedtls_aes_free(&aes);
 }
 
 void setup() {
@@ -88,7 +94,9 @@ void setup() {
     lcd.clear();
 
     setup_wifi();
+    espClient.setCACert("your_ca_certificate_here"); // Add CA certificate
     client.setServer(MQTT_SERVER, MQTT_PORT);
+    client.setCallback(callback);
 }
 
 void loop() {
@@ -105,75 +113,56 @@ void loop() {
     bool parking1Full = digitalRead(irParking1);
     bool parking2Full = digitalRead(irParking2);
 
-    // Serial monitor output
-    Serial.print("Barrier1: ");
-    Serial.print(barrier1State);
-    Serial.print(" Barrier2: ");
-    Serial.print(barrier2State);
-    Serial.print(" AirQuality: ");
-    Serial.print(airQualityValue);
-    Serial.print(" P1 Full: ");
-    Serial.print(parking1Full);
-    Serial.print(" P2 Full: ");
-    Serial.println(parking2Full);
-
-
-    // Detect car at entry (IR 1 = 0 when car is present)
     if (barrier1State == 0) {
         total_car_count++;
         lcd.clear();
         lcd.print("Car Detected!");
         Serial.println("Car Detected at Entry");
         barrierServo.write(servoOpenAngle);
-        Serial.println("Barrier Opened");
         delay(2000);
 
-        // Good air quality (EV)
         if (airQualityValue < 1300) {
-            // Floor 1 available
-            if (parking1Full == 1) {
+            if (parking1Full) {
                 ev_car_count++;
                 lcd.clear();
                 scrollText("EV->1st Floor", 300, 2);
-                Serial.println("EV (Good Air Quality) -> Floor 1");
             } else {
                 ev_car_count++;
                 lcd.clear();
                 scrollText("1st Full->Redirect to Floor 2", 300, 2);
-                Serial.println("Floor 1 Full -> Redirect to Floor 2");
             }
         } else {
-            // Poor air quality (non-EV)
-            if (parking2Full == 1) {
+            if (parking2Full) {
                 petrol_car_count++;
                 lcd.clear();
                 scrollText("Non-EV->2nd Floor", 300, 2);
-                Serial.println("Non-EV (Poor Air Quality) -> Floor 2");
             } else {
                 petrol_car_count++;
                 lcd.clear();
                 scrollText("2nd Full->Redirect to Floor 1", 300, 2);
-                Serial.println("Floor 2 Full -> Redirect to Floor 1");
             }
         }
-        /// MQTT message in JSON format
-        char mqttMessage[256];
-        snprintf(mqttMessage, sizeof(mqttMessage), 
-            "{\"TotalCar\": %d, \"EvCar\": %d, \"PetrolCar\": %d, \"AirQuality\": %d, \"Parking1Full\": %d, \"Parking2Full\": %d}", 
-            total_car_count, ev_car_count, petrol_car_count, airQualityValue, parking1Full, parking2Full);
-        Serial.println(mqttMessage);
-        client.publish(MQTT_TOPIC, mqttMessage);
 
-        // Wait for the car to pass IR2
+        // Create MQTT message
+        char mqttMessage[256];
+        snprintf(mqttMessage, sizeof(mqttMessage),
+                 "{\"TotalCar\": %d, \"EvCar\": %d, \"PetrolCar\": %d, \"AirQuality\": %d, \"Parking1Full\": %d, \"Parking2Full\": %d}",
+                 total_car_count, ev_car_count, petrol_car_count, airQualityValue, parking1Full, parking2Full);
+
+        // Encrypt the message
+        unsigned char encryptedMessage[256];
+        encryptData(mqttMessage, encryptedMessage, sizeof(mqttMessage));
+
+        // Publish encrypted message
+        client.publish(MQTT_TOPIC, (char*)encryptedMessage);
+
         while (digitalRead(irBarrier2) == 1) {
             scrollText("Waiting car to exit", 300, 2);
-            Serial.println("Waiting for car to exit...");
         }
 
         barrierServo.write(servoCloseAngle);
         lcd.clear();
         scrollText("Barrier Closed", 300, 2);
-        Serial.println("Barrier Closed");
         delay(2000);
         delay(20000);
     }
@@ -201,13 +190,12 @@ void scrollText(String message, int scrollDelay, int repeatCount) {
 void reconnect() {
     while (!client.connected()) {
         Serial.println("Attempting MQTT connection...");
-
-        if (client.connect("ESP32Client")) {
+        if (client.connect("ESP32Client", MQTT_USERNAME, MQTT_PASSWORD)) {
             Serial.println("Connected to MQTT server");
+            client.subscribe(MQTT_TOPIC);
         } else {
             Serial.print("Failed, rc=");
             Serial.print(client.state());
-            Serial.println(" Retrying in 5 seconds...");
             delay(5000);
         }
     }
